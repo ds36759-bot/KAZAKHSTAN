@@ -1571,10 +1571,7 @@ img,svg{max-width:100%}
         <div class="overline">Новый аккаунт</div>
         <h2 class="panel-title">Регистрация</h2>
         <label class="auth-field"><span>ФИО КАК В КВАДРАСОФТ</span><input id="regFullName" class="auth-input" autocomplete="name" /></label>
-        <div class="auth-inline">
-          <label class="auth-field"><span>ПОЧТА</span><input id="regEmail" class="auth-input" type="email" autocomplete="email" /></label>
-          <button id="sendEmailCodeBtn" class="auth-small-btn" type="button">ПОДТВЕРДИТЬ</button>
-        </div>
+        <label class="auth-field"><span>ПОЧТА</span><input id="regEmail" class="auth-input" type="email" autocomplete="email" /></label>
         <label id="emailCodeField" class="auth-field hidden"><span>КОД ИЗ ПОЧТЫ</span><input id="regEmailCode" class="auth-input" inputmode="numeric" maxlength="6" autocomplete="one-time-code" /><small class="auth-code-note">Код действует 10 минут.</small></label>
         <label class="auth-field"><span>ЛОГИН</span><input id="regLogin" class="auth-input" autocomplete="username" /></label>
         <label class="auth-field"><span>ПАРОЛЬ</span><input id="regPassword" class="auth-input" type="password" autocomplete="new-password" /></label>
@@ -1988,12 +1985,18 @@ const rpcPending = new Map();
 let rpcSeq = 0;
 
 window.addEventListener('message', event => {
-  if(event.origin !== 'https://script.googleusercontent.com' && event.origin !== 'https://script.google.com') return;
+  // Apps Script HtmlService may execute the response inside a nested Google sandbox iframe.
+  // Validate the Google origin + one-time requestId; do not require event.source to equal
+  // the outer transport iframe, because the actual sender can be its nested child frame.
+  const origin = String(event.origin || '');
+  const isGoogleRpcOrigin = origin === 'https://script.google.com' ||
+    origin === 'https://script.googleusercontent.com' ||
+    /^https:\/\/[A-Za-z0-9.-]+\.googleusercontent\.com$/.test(origin);
+  if(!isGoogleRpcOrigin) return;
   const msg = event.data;
   if(!msg || msg.channel !== 'BOVIOS_GAS_RPC' || !msg.requestId) return;
   const pending = rpcPending.get(msg.requestId);
   if(!pending) return;
-  if(pending.iframe.contentWindow && event.source !== pending.iframe.contentWindow) return;
   rpcPending.delete(msg.requestId);
   clearTimeout(pending.timer);
   try{ pending.iframe.remove(); }catch(_){ }
@@ -2114,29 +2117,85 @@ async function submitLogin(){
   }catch(error){ setAuthMessage(error.message||'Ошибка входа.','error'); }
   finally{ setBusy(btn,false); }
 }
-async function sendRegistrationCode(){
-  const btn=$('sendEmailCodeBtn'); setBusy(btn,true,'ОТПРАВКА…'); setAuthMessage('');
-  try{
-    const result=await gasCall('requestEmailVerification',$('regEmail').value,$('regFullName').value);
-    if(!result?.ok){ setAuthMessage(result?.message||'ПОЧТА НЕ ВЕРНА','error'); return; }
-    $('emailCodeField').classList.remove('hidden');
-    setAuthMessage(result.message||'Код отправлен.','success');
-    $('regEmailCode').focus();
-  }catch(error){ setAuthMessage(error.message||'ПОЧТА НЕ ВЕРНА','error'); }
-  finally{ setBusy(btn,false); }
+let registrationCodeRequestedFor='';
+
+function registrationVerificationKey(){
+  return `${$('regEmail').value.trim().toLowerCase()}|${$('regFullName').value.trim()}`;
 }
+
+function resetRegistrationVerification(){
+  registrationCodeRequestedFor='';
+  $('regEmailCode').value='';
+  $('emailCodeField').classList.add('hidden');
+}
+
 async function submitRegistration(){
-  const btn=$('registerBtn'); setBusy(btn,true,'РЕГИСТРАЦИЯ…'); setAuthMessage('');
+  const btn=$('registerBtn');
+  const email=$('regEmail').value.trim();
+  const fullName=$('regFullName').value.trim();
+  const login=$('regLogin').value.trim();
+  const password=$('regPassword').value;
+  const verificationCode=$('regEmailCode').value.trim();
+  const verificationKey=registrationVerificationKey();
+
+  setAuthMessage('');
+
+  if(!fullName || fullName.length<5){
+    setAuthMessage('Укажите ФИО как в Квадрасофт.','error');
+    $('regFullName').focus();
+    return;
+  }
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i.test(email)){
+    setAuthMessage('ПОЧТА НЕ ВЕРНА','error');
+    $('regEmail').focus();
+    return;
+  }
+  if(!login || login.length<3){
+    setAuthMessage('Логин должен содержать минимум 3 символа.','error');
+    $('regLogin').focus();
+    return;
+  }
+  if(password.length<8){
+    setAuthMessage('Пароль должен содержать минимум 8 символов.','error');
+    $('regPassword').focus();
+    return;
+  }
+
+  if(registrationCodeRequestedFor!==verificationKey || !verificationCode){
+    setBusy(btn,true,'ОТПРАВКА КОДА…');
+    try{
+      const result=await gasCall('requestEmailVerification',email,fullName);
+      if(!result?.ok){
+        setAuthMessage(result?.message||'ПОЧТА НЕ ВЕРНА','error');
+        return;
+      }
+      registrationCodeRequestedFor=verificationKey;
+      $('emailCodeField').classList.remove('hidden');
+      setAuthMessage(result.message||'Код отправлен на почту. Введите код и снова нажмите «СОЗДАТЬ АККАУНТ».','success');
+      $('regEmailCode').focus();
+    }catch(error){
+      setAuthMessage(error.message||'Не удалось отправить код.','error');
+    }finally{
+      setBusy(btn,false);
+    }
+    return;
+  }
+
+  setBusy(btn,true,'РЕГИСТРАЦИЯ…');
   let accountCreated=false;
   try{
     const result=await gasCall('registerAccount',{
-      email:$('regEmail').value, verificationCode:$('regEmailCode').value,
-      login:$('regLogin').value, password:$('regPassword').value, fullName:$('regFullName').value
+      email, verificationCode, login, password, fullName
     });
-    if(!result?.ok){ setAuthMessage(result?.message||'Ошибка регистрации.','error'); return; }
+    if(!result?.ok){
+      setAuthMessage(result?.message||'Ошибка регистрации.','error');
+      return;
+    }
 
     accountCreated=true;
+    registrationCodeRequestedFor='';
     $('regPassword').value='';
+    $('regEmailCode').value='';
     setBusy(btn,false);
     setAuthMessage('Аккаунт создан. Загружаем личный кабинет…','success');
 
@@ -2704,8 +2763,10 @@ $('registerTab').onclick = () => setAuthMode('register');
 $('forgotPasswordBtn').onclick = () => setAuthMode('forgot');
 $('backToLoginBtn').onclick = () => setAuthMode('login');
 $('loginBtn').onclick = submitLogin;
-$('sendEmailCodeBtn').onclick = sendRegistrationCode;
 $('registerBtn').onclick = submitRegistration;
+$('regEmail').addEventListener('input',resetRegistrationVerification);
+$('regFullName').addEventListener('input',resetRegistrationVerification);
+$('regEmailCode').addEventListener('keydown',e=>{if(e.key==='Enter') submitRegistration();});
 $('sendResetCodeBtn').onclick = sendResetCode;
 $('resetPasswordBtn').onclick = submitPasswordReset;
 $('authPassword').addEventListener('keydown',e=>{if(e.key==='Enter') submitLogin();});
