@@ -2030,11 +2030,12 @@ function gasCall(method, ...args){
     });
     document.body.appendChild(form);
 
+    const timeoutMs = method==='getPortalBootstrap' ? 90000 : (method==='registerAccount' ? 60000 : 45000);
     const timer = setTimeout(()=>{
       rpcPending.delete(requestId);
       try{ iframe.remove(); }catch(_){ }
       reject(new Error('Сервер не ответил. Проверьте публикацию Google Apps Script и доступ Web App.'));
-    }, 45000);
+    }, timeoutMs);
 
     rpcPending.set(requestId,{resolve,reject,iframe,timer});
     try{
@@ -2127,17 +2128,34 @@ async function sendRegistrationCode(){
 }
 async function submitRegistration(){
   const btn=$('registerBtn'); setBusy(btn,true,'РЕГИСТРАЦИЯ…'); setAuthMessage('');
+  let accountCreated=false;
   try{
     const result=await gasCall('registerAccount',{
       email:$('regEmail').value, verificationCode:$('regEmailCode').value,
       login:$('regLogin').value, password:$('regPassword').value, fullName:$('regFullName').value
     });
     if(!result?.ok){ setAuthMessage(result?.message||'Ошибка регистрации.','error'); return; }
-    setAuthMessage('Регистрация завершена.','success');
+
+    accountCreated=true;
     $('regPassword').value='';
-    await loadAuthorizedPortal(result.token);
-  }catch(error){ setAuthMessage(error.message||'Ошибка регистрации.','error'); }
-  finally{ setBusy(btn,false); }
+    setBusy(btn,false);
+    setAuthMessage('Аккаунт создан. Загружаем личный кабинет…','success');
+
+    const loaded=await loadAuthorizedPortal(result.token,true);
+    if(!loaded){
+      setAuthMode('login');
+      setAuthMessage('Аккаунт создан. Войдите с новым логином и паролем.','success');
+    }
+  }catch(error){
+    if(accountCreated){
+      setAuthMode('login');
+      setAuthMessage('Аккаунт создан. Войдите с новым логином и паролем.','success');
+    }else{
+      setAuthMessage(error.message||'Ошибка регистрации.','error');
+    }
+  }finally{
+    if(btn.disabled) setBusy(btn,false);
+  }
 }
 async function sendResetCode(){
   const btn=$('sendResetCodeBtn'); setBusy(btn,true,'ОТПРАВКА…'); setAuthMessage('');
