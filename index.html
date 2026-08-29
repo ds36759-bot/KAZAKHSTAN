@@ -2019,7 +2019,8 @@ function gasCall(method, ...args){
     const fields = {
       rpc_id: requestId,
       rpc_method: method,
-      rpc_args: JSON.stringify(args)
+      rpc_args: JSON.stringify(args),
+      rpc_origin: (window.location.origin && window.location.origin !== 'null') ? window.location.origin : '*'
     };
     Object.entries(fields).forEach(([name,value])=>{
       const input = document.createElement('input');
@@ -2028,11 +2029,11 @@ function gasCall(method, ...args){
     });
     document.body.appendChild(form);
 
-    const timeoutMs = method==='getPortalBootstrap' ? 90000 : (method==='registerAccount' ? 60000 : 45000);
+    const timeoutMs = 5000;
     const timer = setTimeout(()=>{
       rpcPending.delete(requestId);
       try{ iframe.remove(); }catch(_){ }
-      reject(new Error('Сервер не ответил. Проверьте публикацию Google Apps Script и доступ Web App.'));
+      reject(new Error('Сервер не ответил за 5 секунд. Повторите попытку или проверьте публикацию Google Apps Script.'));
     }, timeoutMs);
 
     rpcPending.set(requestId,{resolve,reject,iframe,timer});
